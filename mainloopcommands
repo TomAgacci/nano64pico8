@@ -1,0 +1,14 @@
+8. Main Loop
+Contains:
+
+_init()
+
+_update60()
+
+_draw()
+
+Camera orbit
+
+VM stepping
+
+This is the PICO‑8 host environment.
