@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PICO‑8 3D PARK (Stationary Player, Correct Controls)</title>
+<style>
+  body {
+    background:#000;
+    margin:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+  }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border:4px solid #fff;
+  }
+</style>
+</head>
+<body>
+<canvas id="pico" width="128" height="128"></canvas>
+<script>
+// PICO‑8 palette
+const P=[
+"#000000","#1D2B53","#7E2553","#008751",
+"#AB5236","#5F574F","#C2C3C7","#FFF1E8",
+"#FF004D","#FFA300","#FFEC27","#00E436",
+"#29ADFF","#83769C","#FF77A8","#FFCCAA"
+];
+
+const cvs=document.getElementById("pico");
+const ctx=cvs.getContext("2d");
+const S=4;
+cvs.style.width=cvs.width*S+"px";
+cvs.style.height=cvs.height*S+"px";
+
+// vec ops
+function V(x,y,z){return {x,y,z};}
+function add(a,b){return V(a.x+b.x,a.y+b.y,a.z+b.z);}
+function sub(a,b){return V(a.x-b.x,a.y-b.y,a.z-b.z);}
+function cross(a,b){return V(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x);}
+
+// rotation
+function rotY(v,a){
+  const c=Math.cos(a), s=Math.sin(a);
+  return V(v.x*c - v.z*s, v.y, v.x*s + v.z*c);
+}
+
+// camera at origin, looking toward +Z
+const camPos=V(0,0,0);
+let yaw=0;
+
+// projection
+function project(v){
+  const z = v.z;
+  if(z <= 0.1) return {x:9999,y:9999,z:z};
+  const f = 80 / z;
+  return {x:64 + v.x*f, y:64 - v.y*f, z:z};
+}
+
+// cube mesh
+function cube(x,y,z,s,col){
+  const v=[
+    V(-s,-s,-s),V(s,-s,-s),V(s,s,-s),V(-s,s,-s),
+    V(-s,-s,s),V(s,-s,s),V(s,s,s),V(-s,s,s)
+  ];
+  const f=[
+    [0,1,2,3],[4,5,6,7],[0,1,5,4],
+    [1,2,6,5],[2,3,7,6],[3,0,4,7]
+  ];
+  return {v,f,col,pos:V(x,y,z)};
+}
+
+// tree = trunk + leaves
+function makeTree(x,z){
+  return [
+    cube(x,-0.5,z,0.2,4),
+    cube(x,0.3,z,0.6,11)
+  ];
+}
+
+// scene objects
+let objects=[];
+for(let i=0;i<12;i++){
+  const x=(Math.random()*20)-10;
+  const z=(Math.random()*20)+5;
+  objects.push(...makeTree(x,z));
+}
+objects.push(cube(0,-1.2,20,20,12)); // ground
+
+// input
+let keys={};
+onkeydown=e=>keys[e.key]=1;
+onkeyup=e=>keys[e.key]=0;
+
+// draw face
+function drawFace(pv,f,col){
+  const a=pv[f[0]],b=pv[f[1]],c=pv[f[2]],d=pv[f[3]];
+  ctx.fillStyle=P[col];
+  ctx.beginPath();
+  ctx.moveTo(a.x,a.y);
+  ctx.lineTo(b.x,b.y);
+  ctx.lineTo(c.x,c.y);
+  ctx.lineTo(d.x,d.y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function loop(){
+  const sp=0.1;
+
+  // Movement controls
+  if(keys["w"])  for(const o of objects) o.pos.z -= sp; // forward
+  if(keys["s"])  for(const o of objects) o.pos.z += sp; // backward
+  if(keys["a"])  for(const o of objects) o.pos.x += sp; // strafe left
+  if(keys["d"])  for(const o of objects) o.pos.x -= sp; // strafe right
+
+  // Look controls (corrected)
+  if(keys["ArrowLeft"])  yaw -= 0.05;  // yaw left (decrease)
+  if(keys["ArrowRight"]) yaw += 0.05;  // yaw right (increase)
+
+  ctx.fillStyle=P[0];
+  ctx.fillRect(0,0,128,128);
+
+  // sky
+  for(let y=0;y<128;y++){
+    ctx.fillStyle=P[13];
+    ctx.fillRect(0,y,128,1);
+  }
+
+  let faces=[];
+
+  for(const o of objects){
+    const worldVerts=o.v.map(v=>{
+      let w=add(v,o.pos);
+      w=sub(w,camPos);
+      w=rotY(w,yaw);
+      return w;
+    });
+
+    const projVerts=worldVerts.map(project);
+
+    for(const f of o.f){
+      const a=worldVerts[f[0]],b=worldVerts[f[1]],c=worldVerts[f[2]];
+      const n=cross(sub(b,a),sub(c,a));
+      if(n.z <= 0) continue; // keep faces facing camera
+
+      const depth=(a.z+b.z+c.z+worldVerts[f[3]].z)/4;
+      faces.push({f,proj:projVerts,col:o.col,depth});
+    }
+  }
+
+  faces.sort((a,b)=>b.depth-a.depth);
+
+  for(const F of faces){
+    drawFace(F.proj,F.f,F.col);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
