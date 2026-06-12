@@ -1,0 +1,666 @@
+-------------------------------
+-- nano64 for pico-8
+-- vm + 3d + assembler + mats
+-------------------------------
+
+-------------------------------
+-- fixed / helpers
+-------------------------------
+function fx(v)
+  return flr(v*256+0.5)
+end
+
+function fx_to_f(v)
+  return v/256
+end
+
+-------------------------------
+-- nano64 vm state
+-------------------------------
+nano64 = {}
+
+function nano64_init()
+  nano64.r = {0,0,0,0,0,0,0,0}
+  nano64.pc = 0
+  nano64.sp = 0x3f
+  nano64.fl = 0
+  nano64.mem = {}
+  for i=0,0x1fff do
+    nano64.mem[i] = 0
+  end
+  nano64.halt = false
+
+  nano64_load_demo_rom()
+end
+
+-------------------------------
+-- memory helpers
+-------------------------------
+function m8(addr)
+  return nano64.mem[addr] or 0
+end
+
+function m8_set(addr,v)
+  nano64.mem[addr] = band(v,0xff)
+end
+
+function m16(addr)
+  local lo = m8(addr)
+  local hi = m8(addr+1)
+  local v = lo + hi*256
+  if v >= 0x8000 then v = v-0x10000 end
+  return v
+end
+
+function m16_set(addr,v)
+  if v < 0 then v = v + 0x10000 end
+  m8_set(addr, band(v,0xff))
+  m8_set(addr+1, band(v>>8,0xff))
+end
+
+-------------------------------
+-- flags
+-------------------------------
+function set_zn(v)
+  local fl = nano64.fl
+  fl = band(fl, bnot(3))
+  if v == 0 then fl = bor(fl,1) end
+  if v < 0 then fl = bor(fl,2) end
+  nano64.fl = fl
+end
+
+function flag_z()
+  return band(nano64.fl,1) ~= 0
+end
+
+-------------------------------
+-- opcode defs
+-------------------------------
+OP_NOP   = 0x00
+OP_HALT  = 0x01
+
+OP_ADD   = 0x10
+OP_SUB   = 0x11
+OP_MUL   = 0x12
+OP_DIV   = 0x13
+OP_INC   = 0x14
+OP_DEC   = 0x15
+
+OP_AND   = 0x20
+OP_OR    = 0x21
+OP_XOR   = 0x22
+OP_NOT   = 0x23
+
+OP_LD    = 0x30 -- LD rA,[addr16]
+OP_ST    = 0x31 -- ST rA,[addr16]
+OP_LDB   = 0x32 -- LDB rA,imm8
+OP_LDW   = 0x33 -- LDW rA,imm16
+
+OP_JMP   = 0x40
+OP_JZ    = 0x41
+OP_JNZ   = 0x42
+OP_CALL  = 0x43
+OP_RET   = 0x44
+
+OP_SPR   = 0x50 -- SPR rA,rB
+OP_MESH  = 0x51 -- MESH rA (mesh id in rA)
+OP_SND   = 0x52 -- SND rA,rB
+
+-------------------------------
+-- vm step
+-------------------------------
+function nano64_step()
+  if nano64.halt then return end
+
+  local pc = nano64.pc
+  local op = m8(pc)
+  local arg = m8(pc+1)
+  nano64.pc = pc + 2
+
+  local ra = band(arg>>4,0x7)
+  local rb = band(arg,0x7)
+  local r = nano64.r
+
+  if op == OP_NOP then
+
+  elseif op == OP_HALT then
+    nano64.halt = true
+
+  elseif op == OP_ADD then
+    local v = r[ra+1] + r[rb+1]
+    if v >= 0x8000 then v -= 0x10000 end
+    if v < -0x8000 then v += 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_SUB then
+    local v = r[ra+1] - r[rb+1]
+    if v >= 0x8000 then v -= 0x10000 end
+    if v < -0x8000 then v += 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_MUL then
+    local v = flr((r[ra+1]*r[rb+1])/256)
+    if v >= 0x8000 then v -= 0x10000 end
+    if v < -0x8000 then v += 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_DIV then
+    local d = r[rb+1]
+    if d == 0 then d = 1 end
+    local v = flr((r[ra+1]*256)/d)
+    if v >= 0x8000 then v -= 0x10000 end
+    if v < -0x8000 then v += 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_INC then
+    local v = r[ra+1] + 256
+    if v >= 0x8000 then v -= 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_DEC then
+    local v = r[ra+1] - 256
+    if v < -0x8000 then v += 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_AND then
+    local v = band(r[ra+1], r[rb+1])
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_OR then
+    local v = bor(r[ra+1], r[rb+1])
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_XOR then
+    local v = bxor(r[ra+1], r[rb+1])
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_NOT then
+    local v = bxor(r[ra+1],0xffff)
+    if v >= 0x8000 then v -= 0x10000 end
+    r[ra+1] = v
+    set_zn(v)
+
+  elseif op == OP_LD then
+    local addr = m16(nano64.pc)
+    nano64.pc += 2
+    r[ra+1] = m16(addr)
+    set_zn(r[ra+1])
+
+  elseif op == OP_ST then
+    local addr = m16(nano64.pc)
+    nano64.pc += 2
+    m16_set(addr, r[ra+1])
+
+  elseif op == OP_LDB then
+    local imm = m8(nano64.pc)
+    nano64.pc += 1
+    if imm >= 0x80 then imm -= 0x100 end
+    r[ra+1] = imm*256
+    set_zn(r[ra+1])
+
+  elseif op == OP_LDW then
+    local imm = m16(nano64.pc)
+    nano64.pc += 2
+    r[ra+1] = imm
+    set_zn(imm)
+
+  elseif op == OP_JMP then
+    local addr = m16(nano64.pc)
+    nano64.pc = addr
+
+  elseif op == OP_JZ then
+    local addr = m16(nano64.pc)
+    if flag_z() then
+      nano64.pc = addr
+    else
+      nano64.pc += 2
+    end
+
+  elseif op == OP_JNZ then
+    local addr = m16(nano64.pc)
+    if not flag_z() then
+      nano64.pc = addr
+    else
+      nano64.pc += 2
+    end
+
+  elseif op == OP_CALL then
+    local addr = m16(nano64.pc)
+    local sp = nano64.sp
+    m16_set(0x1300 + sp*2, nano64.pc+2)
+    nano64.sp = sp-1
+    nano64.pc = addr
+
+  elseif op == OP_RET then
+    nano64.sp += 1
+    local ret = m16(0x1300 + nano64.sp*2)
+    nano64.pc = ret
+
+  elseif op == OP_SPR then
+    nano64_sys_spr(ra,rb)
+
+  elseif op == OP_MESH then
+    nano64_sys_mesh(ra)
+
+  elseif op == OP_SND then
+    nano64_sys_snd(ra,rb)
+  end
+end
+
+-------------------------------
+-- system calls (host side)
+-------------------------------
+function nano64_sys_spr(ra,rb)
+  local r = nano64.r
+  local spr_idx = band(r[ra+1]>>8,0xff)
+  local packed = r[rb+1]
+  local x = band(packed>>8,0xff)
+  local y = band(packed,0xff)
+  spr(spr_idx,x,y)
+end
+
+function nano64_sys_snd(ra,rb)
+  local r = nano64.r
+  local pitch = band(r[ra+1]>>8,0xff)
+  local wave = band(r[rb+1]>>8,0x3)
+  sfx(0,0,pitch,1,wave)
+end
+
+-- mesh id in rA (8.8)
+-- material/shader in r1 (8.8) for this demo:
+-- high nibble: mode (0=wire,1=filled)
+-- low nibble: color index
+function nano64_sys_mesh(ra)
+  local r = nano64.r
+  local mesh_id = band(r[ra+1]>>8,0xff)
+  local mat_byte = band(r[2]>>8,0xff) -- r1 as material
+  nano64_active_material = mat_byte
+  nano64_draw_mesh_id(mesh_id)
+end
+
+-------------------------------
+-- 3d math
+-------------------------------
+function v3(x,y,z)
+  return {x=x,y=y,z=z}
+end
+
+function v3_add(a,b)
+  return v3(a.x+b.x,a.y+b.y,a.z+b.z)
+end
+
+function v3_sub(a,b)
+  return v3(a.x-b.x,a.y-b.y,a.z-b.z)
+end
+
+function v3_scale(a,s)
+  return v3(a.x*s,a.y*s,a.z*s)
+end
+
+function v3_dot(a,b)
+  return a.x*b.x + a.y*b.y + a.z*b.z
+end
+
+function v3_cross(a,b)
+  return v3(
+    a.y*b.z - a.z*b.y,
+    a.z*b.x - a.x*b.z,
+    a.x*b.y - a.y*b.x
+  )
+end
+
+function v3_norm(a)
+  local l = sqrt(a.x*a.x + a.y*a.y + a.z*a.z)
+  if l == 0 then return v3(0,0,0) end
+  return v3(a.x/l,a.y/l,a.z/l)
+end
+
+function m4_identity()
+  return {
+    1,0,0,0,
+    0,1,0,0,
+    0,0,1,0,
+    0,0,0,1
+  }
+end
+
+function m4_mul(a,b)
+  local r = {}
+  for ri=0,3 do
+    for ci=0,3 do
+      local s=0
+      for k=0,3 do
+        s += a[1+ri*4+k]*b[1+k*4+ci]
+      end
+      r[1+ri*4+ci] = s
+    end
+  end
+  return r
+end
+
+function m4_translate(tx,ty,tz)
+  local m = m4_identity()
+  m[4]  = tx
+  m[8]  = ty
+  m[12] = tz
+  return m
+end
+
+function m4_scale(sx,sy,sz)
+  local m = m4_identity()
+  m[1]  = sx
+  m[6]  = sy
+  m[11] = sz
+  return m
+end
+
+function m4_rot_y(a)
+  local c,s = cos(a),-sin(a)
+  return {
+    c, 0, -s, 0,
+    0, 1,  0, 0,
+    s, 0,  c, 0,
+    0, 0,  0, 1
+  }
+end
+
+function m4_rot_x(a)
+  local c,s = cos(a),-sin(a)
+  return {
+    1, 0, 0, 0,
+    0, c,-s, 0,
+    0, s, c, 0,
+    0, 0, 0, 1
+  }
+end
+
+function m4_mul_v3(m,v)
+  local x = v.x*m[1] + v.y*m[2] + v.z*m[3]  + m[4]
+  local y = v.x*m[5] + v.y*m[6] + v.z*m[7]  + m[8]
+  local z = v.x*m[9] + v.y*m[10]+ v.z*m[11] + m[12]
+  return v3(x,y,z)
+end
+
+-------------------------------
+-- camera + projection
+-------------------------------
+nano64_cam = {
+  pos = v3(0,0,-6),
+  target = v3(0,0,0),
+  up = v3(0,1,0),
+  fov = 0.9
+}
+
+function m4_lookat(eye,center,up)
+  local f = v3_norm(v3_sub(center,eye))
+  local s = v3_norm(v3_cross(f,up))
+  local u = v3_cross(s,f)
+
+  return {
+    s.x, u.x, -f.x, -v3_dot(s,eye),
+    s.y, u.y, -f.y, -v3_dot(u,eye),
+    s.z, u.z, -f.z,  v3_dot(f,eye),
+    0,   0,    0,    1
+  }
+end
+
+function project_point(v)
+  local z = v.z
+  if z == 0 then z = 0.0001 end
+  local f = nano64_cam.fov / z
+  local sx = 64 + v.x * 64 * f
+  local sy = 64 - v.y * 64 * f
+  return sx,sy
+end
+
+-------------------------------
+-- mesh data + materials
+-------------------------------
+nano64_meshes = {}
+
+-- mesh 1: cube
+cube_verts = {
+  v3(-1,-1,-1),
+  v3( 1,-1,-1),
+  v3( 1, 1,-1),
+  v3(-1, 1,-1),
+  v3(-1,-1, 1),
+  v3( 1,-1, 1),
+  v3( 1, 1, 1),
+  v3(-1, 1, 1),
+}
+
+cube_edges = {
+  {1,2},{2,3},{3,4},{4,1},
+  {5,6},{6,7},{7,8},{8,5},
+  {1,5},{2,6},{3,7},{4,8}
+}
+
+-- faces for filled mode (quads)
+cube_faces = {
+  {1,2,3,4},
+  {5,6,7,8},
+  {1,2,6,5},
+  {2,3,7,6},
+  {3,4,8,7},
+  {4,1,5,8}
+}
+
+-- material byte:
+-- high nibble: mode (0=wire,1=filled,2=wire+fill)
+-- low nibble: color index
+nano64_meshes[1] = {
+  verts = cube_verts,
+  edges = cube_edges,
+  faces = cube_faces,
+  mat   = 0x0b -- default: wire, color 11
+}
+
+function nano64_draw_mesh(mesh, model_m)
+  local view = m4_lookat(nano64_cam.pos, nano64_cam.target, nano64_cam.up)
+  local mv = m4_mul(view, model_m)
+
+  local proj_verts = {}
+  for i,v in ipairs(mesh.verts) do
+    local w = m4_mul_v3(mv, v)
+    local sx,sy = project_point(w)
+    proj_verts[i] = {x=sx,y=sy,z=w.z}
+  end
+
+  -- resolve material: mesh.mat overridden by nano64_active_material if set
+  local mat = nano64_active_material or mesh.mat or 0x0f
+  local mode = band(mat>>4,0xf)
+  local col  = band(mat,0xf)
+
+  -- filled faces
+  if mode == 1 or mode == 2 then
+    if mesh.faces then
+      color(col)
+      for f in all(mesh.faces) do
+        local a = proj_verts[f[1]]
+        local b = proj_verts[f[2]]
+        local c = proj_verts[f[3]]
+        local d = proj_verts[f[4]]
+        -- draw as two tris
+        tri(a.x,a.y,b.x,b.y,c.x,c.y,col)
+        tri(a.x,a.y,c.x,c.y,d.x,d.y,col)
+      end
+    end
+  end
+
+  -- wireframe
+  if mode == 0 or mode == 2 then
+    color(col)
+    for e in all(mesh.edges) do
+      local a = proj_verts[e[1]]
+      local b = proj_verts[e[2]]
+      line(a.x,a.y,b.x,b.y)
+    end
+  end
+end
+
+function nano64_draw_mesh_id(id)
+  local mesh = nano64_meshes[id]
+  if not mesh then return end
+  local m = nano64_model_m or m4_identity()
+  nano64_draw_mesh(mesh, m)
+end
+
+-------------------------------
+-- nano64 assembler
+-------------------------------
+-- simple one-pass with label fixup
+
+n64_asm_buf = {}
+n64_asm_labels = {}
+n64_asm_fixups = {}
+n64_asm_pc = 0
+
+function n64_asm_reset(pc)
+  n64_asm_buf = {}
+  n64_asm_labels = {}
+  n64_asm_fixups = {}
+  n64_asm_pc = pc or 0
+end
+
+function n64_emit(b)
+  n64_asm_buf[n64_asm_pc] = band(b,0xff)
+  n64_asm_pc += 1
+end
+
+function n64_label(name)
+  n64_asm_labels[name] = n64_asm_pc
+end
+
+function n64_fixup(name,addr_pos)
+  add(n64_asm_fixups,{name=name,addr=addr_pos})
+end
+
+-- encode reg pair
+function n64_rr(ra,rb)
+  return band(ra,0x7)<<4 | band(rb,0x7)
+end
+
+-- high-level emitters
+function n64_ins_rr(op,ra,rb)
+  n64_emit(op)
+  n64_emit(n64_rr(ra,rb))
+end
+
+function n64_ins_r_imm8(op,ra,imm)
+  n64_emit(op)
+  n64_emit(n64_rr(ra,0))
+  n64_emit(band(imm,0xff))
+end
+
+function n64_ins_r_addr16(op,ra,label)
+  n64_emit(op)
+  n64_emit(n64_rr(ra,0))
+  local addr_pos = n64_asm_pc
+  n64_emit(0) n64_emit(0)
+  n64_fixup(label,addr_pos)
+end
+
+function n64_ins_jmp(op,label)
+  n64_emit(op)
+  local addr_pos = n64_asm_pc
+  n64_emit(0) n64_emit(0)
+  n64_fixup(label,addr_pos)
+end
+
+-- finalize into nano64.mem
+function n64_emit_rom(dst)
+  dst = dst or nano64.mem
+  -- apply fixups
+  for f in all(n64_asm_fixups) do
+    local addr = n64_asm_labels[f.name] or 0
+    dst[f.addr]   = band(addr,0xff)
+    dst[f.addr+1] = band(addr>>8,0xff)
+  end
+  -- copy buffer
+  for k,v in pairs(n64_asm_buf) do
+    dst[k] = v
+  end
+end
+
+-------------------------------
+-- demo rom using assembler
+-------------------------------
+-- demo program:
+-- r0 = mesh id (1)
+-- r1 = material byte (mode/color)
+-- loop:
+--   MESH r0
+--   tweak material in r1 (flip mode/color)
+--   JMP loop
+
+function nano64_load_demo_rom()
+  n64_asm_reset(0x0000)
+
+  -- LDB r0,1  ; mesh id 1
+  n64_ins_r_imm8(OP_LDB,0,1)
+
+  -- LDB r1,0x1b ; mode=1 (filled), color=11
+  n64_ins_r_imm8(OP_LDB,1,0x1b)
+
+  n64_label("loop")
+
+  -- MESH r0 (material in r1 is read by host)
+  n64_ins_rr(OP_MESH,0,0)
+
+  -- simple material tweak:
+  -- ADD r1,r2 where r2 holds small delta
+  -- LDB r2,1
+  n64_ins_r_imm8(OP_LDB,2,1)
+  n64_ins_rr(OP_ADD,1,2)
+
+  -- JMP loop
+  n64_ins_jmp(OP_JMP,"loop")
+
+  n64_emit_rom(nano64.mem)
+  nano64.pc = 0x0000
+end
+
+-------------------------------
+-- pico-8 lifecycle
+-------------------------------
+t = 0
+rot = 0
+
+function _init()
+  nano64_init()
+end
+
+function _update60()
+  t += 1/60
+  rot += 0.01
+
+  nano64_cam.pos.x = cos(t*0.3)*6
+  nano64_cam.pos.z = -6 + sin(t*0.3)*2
+
+  local m = m4_identity()
+  m = m4_mul(m, m4_rot_y(rot))
+  m = m4_mul(m, m4_rot_x(rot*0.7))
+  m = m4_mul(m, m4_scale(1,1,1))
+  nano64_model_m = m
+
+  for i=1,64 do
+    nano64_step()
+    if nano64.halt then break end
+  end
+end
+
+function _draw()
+  cls(0)
+  rectfill(0,0,127,6,1)
+  print("nano64 vm/3d/asm/mat",2,1,7)
+end
