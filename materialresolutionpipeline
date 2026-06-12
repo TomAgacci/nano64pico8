@@ -1,0 +1,8 @@
+local shader_index = band(nano64.r[4]>>8,0xff) -- r3 = shader
+local shader = nano64_shaders[shader_index] or nano64_shaders[0]
+
+for f in all(mesh.faces) do
+  local mat = f.mat or mesh.mat or 0x0f
+  local col = band(mat,0xf)
+  shader(f,proj_verts,col)
+end
