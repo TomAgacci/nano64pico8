@@ -1,0 +1,26 @@
+nano64_shaders = {
+  [0] = function(face,verts,col)
+          -- wireframe only
+          for i=1,#face do
+            local a=verts[face[i]]
+            local b=verts[face[(i%#face)+1]]
+            line(a.x,a.y,b.x,b.y,col)
+          end
+        end,
+
+  [1] = function(face,verts,col)
+          -- filled
+          local a=verts[face[1]]
+          local b=verts[face[2]]
+          local c=verts[face[3]]
+          local d=verts[face[4]]
+          tri(a.x,a.y,b.x,b.y,c.x,c.y,col)
+          tri(a.x,a.y,c.x,c.y,d.x,d.y,col)
+        end,
+
+  [2] = function(face,verts,col)
+          -- outline + fill
+          nano64_shaders[1](face,verts,col)
+          nano64_shaders[0](face,verts,col)
+        end
+}
