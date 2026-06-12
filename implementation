@@ -1,0 +1,75 @@
+--------------------------------
+-- nano64 string assembler
+--------------------------------
+function n64_asm(src)
+  n64_asm_reset(0x0000)
+
+  for line in all(split(src,"\n")) do
+    line=line:gsub("^%s+",""):gsub("%s+$","")
+    if line=="" then goto continue end
+
+    -- label
+    local lbl=line:match("^(%w+):$")
+    if lbl then
+      n64_label(lbl)
+      goto continue
+    end
+
+    -- parse tokens
+    local t=split(line," ")
+    local op=t[1]
+    local args=line:sub(#op+2)
+
+    if op=="LDB" then
+      local r,imm=args:match("r(%d+),%s*(0x%x+)")
+      if not r then r,imm=args:match("r(%d+),%s*(%d+)") end
+      n64_ins_r_imm8(OP_LDB,tonumber(r),tonumber(imm))
+
+    elseif op=="LDW" then
+      local r,imm=args:match("r(%d+),%s*(0x%x+)")
+      if not r then r,imm=args:match("r(%d+),%s*(%d+)") end
+      n64_emit(OP_LDW)
+      n64_emit(n64_rr(tonumber(r),0))
+      n64_emit(band(imm,0xff))
+      n64_emit(band(imm>>8,0xff))
+
+    elseif op=="LD" then
+      local r,lbl=args:match("r(%d+),%s*%[(%w+)%]")
+      n64_ins_r_addr16(OP_LD,tonumber(r),lbl)
+
+    elseif op=="ST" then
+      local r,lbl=args:match("r(%d+),%s*%[(%w+)%]")
+      n64_ins_r_addr16(OP_ST,tonumber(r),lbl)
+
+    elseif op=="ADD" or op=="SUB" or op=="MUL" or op=="DIV"
+        or op=="AND" or op=="OR" or op=="XOR" then
+      local r1,r2=args:match("r(%d+),%s*r(%d+)")
+      local opcode=_G["OP_"..op]
+      n64_ins_rr(opcode,tonumber(r1),tonumber(r2))
+
+    elseif op=="INC" or op=="DEC" or op=="NOT" then
+      local r=args:match("r(%d+)")
+      local opcode=_G["OP_"..op]
+      n64_ins_rr(opcode,tonumber(r),0)
+
+    elseif op=="JMP" or op=="JZ" or op=="JNZ" or op=="CALL" then
+      local lbl=args:match("(%w+)")
+      local opcode=_G["OP_"..op]
+      n64_ins_jmp(opcode,lbl)
+
+    elseif op=="RET" then
+      n64_emit(OP_RET) n64_emit(0)
+
+    elseif op=="MESH" or op=="SPR" or op=="SND" then
+      local r1,r2=args:match("r(%d+),%s*r(%d+)")
+      if not r1 then r1=args:match("r(%d+)") r2=0 end
+      local opcode=_G["OP_"..op]
+      n64_ins_rr(opcode,tonumber(r1),tonumber(r2))
+
+    end
+
+    ::continue::
+  end
+
+  n64_emit_rom(nano64.mem)
+end
